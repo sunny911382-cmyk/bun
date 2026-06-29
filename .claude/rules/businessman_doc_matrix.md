@@ -1,0 +1,1 @@
+Require SSM Full Set, Company Bank Statements (6-12 mths), Income Tax Forms (2 yrs preferred). Expect Form BE for single Sdn Bhd Directors (Director Fee only). Expect Form B for Sole Prop/Partnership/Multi-entity.

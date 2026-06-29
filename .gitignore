@@ -204,3 +204,6 @@ test/integration/bun-types/fixture/bun.lock
 src/runtime/bake/generated.ts
 /target/
 *.heapsnapshot
+claude.local.md
+.env
+settings.local.json

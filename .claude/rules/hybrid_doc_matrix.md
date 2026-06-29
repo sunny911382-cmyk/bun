@@ -1,0 +1,1 @@
+Require both Employee and Businessman sets. Strict separation of Statutory Employment Income vs. Business Cashflow. Do not double-count director drawings from company accounts as personal income.
