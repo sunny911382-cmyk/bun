@@ -1,0 +1,1 @@
+Require 3-6 mths Payslips, 3-6 mths personal bank statements (must match payslip timeline), EPF statement, and EA Form/Form BE.
