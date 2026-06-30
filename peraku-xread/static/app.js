@@ -2,6 +2,7 @@
 const state = {
   step: 1,
   userType: null,
+  caseId: null,
   docResults: {},
   reviewResult: null,
   creditResult: null,
@@ -91,7 +92,14 @@ function renderStep1() {
       render();
     });
   });
-  document.getElementById("next1")?.addEventListener("click", () => {
+  document.getElementById("next1")?.addEventListener("click", async () => {
+    const meta = { age: null, profession: null, location: null, declared_income: null };
+    const fd = new FormData();
+    fd.append("user_type", state.userType);
+    fd.append("customer_meta", JSON.stringify(meta));
+    const res = await fetch("/cases/create", { method: "POST", body: fd });
+    const data = await res.json();
+    state.caseId = data.case_id;
     state.step = 2; render();
   });
 }
@@ -157,6 +165,8 @@ function bindUpload(doc) {
 
 async function uploadDoc(file, docId, password = null) {
   const fd = new FormData();
+  fd.append("case_id", state.caseId);
+  fd.append("doc_id", docId);
   fd.append("file", file);
   if (password) fd.append("password", password);
   try {
@@ -231,7 +241,7 @@ async function runReview() {
   render(); // show loading state
   try {
     const payload = Object.entries(state.docResults).map(([id, r]) => ({ doc: id, ...r }));
-    const res = await fetch("/cases/review", {
+    const res = await fetch(`/cases/review?case_id=${state.caseId}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -302,7 +312,7 @@ async function runCreditProfile() {
     ],
   };
   try {
-    const res = await fetch("/cases/credit-profile", {
+    const res = await fetch(`/cases/credit-profile?case_id=${state.caseId}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(mockInput),
@@ -367,11 +377,9 @@ function renderStep5() {
 
 async function generateReport() {
   render();
+  // First generate & store the report
   const fd = new FormData();
-  fd.append("user_type", state.userType);
-  fd.append("credit_result", JSON.stringify(state.creditResult));
-  fd.append("review_result", JSON.stringify(state.reviewResult || {}));
-  fd.append("customer_meta", JSON.stringify({ age: 35, profession: "Junior Executive", location: "Ipoh, Perak", declared_income: 4000 }));
+  fd.append("case_id", state.caseId);
   fd.append("encrypt", "false");
 
   try {
@@ -386,25 +394,38 @@ async function generateReport() {
   showReportResult();
 }
 
+async function initiatePayment() {
+  try {
+    const res = await fetch(`/payments/checkout?case_id=${state.caseId}`, { method: "POST" });
+    const data = await res.json();
+    if (data.checkout_url) {
+      window.location.href = data.checkout_url;
+    }
+  } catch {
+    alert("Payment could not be initiated. Please try again.");
+  }
+}
+
 function showReportResult() {
   const summary = state.reportSummary;
-  const downloadURL = state.reportBlob ? URL.createObjectURL(state.reportBlob) : null;
+  const isPaid = false; // set true after Stripe webhook confirms payment
 
   document.getElementById("view").innerHTML = `
     <div class="card report-card">
-      <div class="big-icon">✅</div>
-      <h2>Report Ready</h2>
-      <p>Report ID: <strong>${summary?.report_id ?? "—"}</strong> &nbsp;|&nbsp;
-         Readiness Score: <strong>${summary?.readiness_score ?? "—"} / 100</strong></p>
-      ${state.reportPassword
-        ? `<p style="margin-bottom:8px;font-size:.82rem;color:#d97706">⚠ Save this password — it will not be shown again.</p>
-           <div class="password-reveal">${state.reportPassword}</div>`
-        : ""}
-      ${downloadURL
-        ? `<a class="btn btn-primary" href="${downloadURL}" download="peraku-xread-report.pdf">
-             ⬇ Download PDF
-           </a>`
-        : `<p style="color:#dc2626">Report generation failed. Please try again.</p>`}
+      <div class="big-icon">${state.reportBlob ? "📄" : "❌"}</div>
+      <h2>${state.reportBlob ? "Report Generated" : "Generation Failed"}</h2>
+      ${summary ? `<p>Report ID: <strong>${summary.report_id}</strong> &nbsp;|&nbsp;
+         Readiness Score: <strong>${summary.readiness_score} / 100</strong></p>` : ""}
+
+      ${state.reportBlob ? `
+        <div style="background:#f0fdf4;border:1.5px solid #86efac;border-radius:8px;padding:14px 18px;margin:16px 0;font-size:.84rem;">
+          ✅ Your report has been securely stored. Complete payment below to download it.
+        </div>
+        <button class="btn btn-primary" style="font-size:1rem;padding:14px 28px" onclick="initiatePayment()">
+          💳 Pay RM 29 to Download Report
+        </button>
+      ` : `<p style="color:#dc2626">Report generation failed. Please try again.</p>`}
+
       <div class="disclaimer">
         DISCLAIMER: This report is generated strictly based on the data and explanations provided
         by the user. Peraku-Xread is a data processing service and does not act as a regulator,
@@ -419,7 +440,7 @@ function showReportResult() {
 
 function newCase() {
   Object.assign(state, {
-    step: 1, userType: null, docResults: {}, reviewResult: null,
+    step: 1, userType: null, caseId: null, docResults: {}, reviewResult: null,
     creditResult: null, reportBlob: null, reportPassword: null, reportSummary: null,
   });
   render();

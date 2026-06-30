@@ -6,7 +6,7 @@ import os
 
 load_dotenv()
 
-from routers import cases
+from routers import cases, payments
 
 app = FastAPI(
     title="Peraku-Xread",
@@ -16,6 +16,7 @@ app = FastAPI(
 
 app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")
 app.include_router(cases.router)
+app.include_router(payments.router)
 
 
 @app.get("/health")
