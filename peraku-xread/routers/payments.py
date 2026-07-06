@@ -1,9 +1,14 @@
+import logging
 import os
+
 import stripe
 from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from db import cases_repo
+from utils.email import send_report_ready
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/payments", tags=["payments"])
 
@@ -55,16 +60,44 @@ async def stripe_webhook(request: Request, stripe_signature: str = Header(None))
     if event["type"] == "checkout.session.completed":
         session = event["data"]["object"]
         case_id = session["metadata"].get("case_id")
+        customer_email = session.get("customer_details", {}).get("email")
+
         if case_id:
             cases_repo.mark_paid(case_id, session["id"])
+            _deliver_report(case_id, customer_email)
 
     return {"received": True}
 
 
-@router.get("/success")
+def _deliver_report(case_id: str, to_email: str | None) -> None:
+    if not to_email:
+        log.warning("No customer email for case %s — skipping email delivery", case_id)
+        return
+    try:
+        case = cases_repo.get_case(case_id)
+        storage_path = case.get("report_storage_path")
+        if not storage_path:
+            log.error("No report on disk for case %s", case_id)
+            return
+        signed_url = cases_repo.get_report_url(storage_path, expires_in=300)
+        summary    = case.get("report_summary") or {}
+        send_report_ready(to_email, case_id, signed_url, summary)
+        log.info("Report email sent to %s for case %s", to_email, case_id)
+    except Exception:
+        log.exception("Failed to deliver report email for case %s", case_id)
+
+
+@router.get("/payment/success", include_in_schema=False)
 def payment_success(session_id: str):
+    """Post-Stripe redirect. Returns JSON; the UI polls this and shows download confirmation."""
     session = stripe.checkout.Session.retrieve(session_id)
     case_id = session.metadata.get("case_id")
     if not case_id:
         raise HTTPException(400, "Invalid session")
-    return JSONResponse({"status": "paid", "case_id": case_id})
+    case = cases_repo.get_case(case_id)
+    return JSONResponse({
+        "status": "paid",
+        "case_id": case_id,
+        "readiness_score": (case.get("report_summary") or {}).get("readiness_score"),
+        "email_sent": bool(session.get("customer_details", {}).get("email")),
+    })
