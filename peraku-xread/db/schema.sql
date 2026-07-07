@@ -8,6 +8,9 @@ create table if not exists cases (
   created_at    timestamptz not null default now(),
   updated_at    timestamptz not null default now(),
 
+  -- Owner (references Supabase Auth users table)
+  user_id       uuid not null references auth.users(id) on delete cascade,
+
   user_type     text not null check (user_type in ('Employee','Businessman','Hybrid')),
   status        text not null default 'draft'
                   check (status in ('draft','docs_uploaded','reviewed','profiled','report_ready','paid')),
@@ -32,6 +35,8 @@ create table if not exists cases (
   report_storage_path text   -- path in Supabase Storage bucket "reports"
 );
 
+create index if not exists cases_user_id_idx on cases(user_id);
+
 -- ── Auto-update updated_at ─────────────────────────────────────────────────
 create or replace function update_updated_at()
 returns trigger language plpgsql as $$
@@ -45,8 +50,12 @@ create trigger cases_updated_at
   before update on cases
   for each row execute function update_updated_at();
 
--- ── RLS (enable and lock down to service role for now) ─────────────────────
+-- ── RLS policies ───────────────────────────────────────────────────────────
 alter table cases enable row level security;
 
--- Service-role key bypasses RLS automatically; no policies needed for backend-only access.
--- Add user-scoped policies here once auth is wired up.
+-- Users can only read and write their own cases
+create policy "owner_select" on cases for select using (auth.uid() = user_id);
+create policy "owner_insert" on cases for insert with check (auth.uid() = user_id);
+create policy "owner_update" on cases for update using (auth.uid() = user_id);
+
+-- Service-role key (used by backend) bypasses RLS automatically.

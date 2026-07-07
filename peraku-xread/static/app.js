@@ -1,4 +1,28 @@
-/* ── State ── */
+/* ── Auth state ── */
+const auth = {
+  token: localStorage.getItem("px_token") || null,
+  user:  JSON.parse(localStorage.getItem("px_user") || "null"),
+};
+
+function saveAuth(token, user) {
+  auth.token = token;
+  auth.user  = user;
+  localStorage.setItem("px_token", token);
+  localStorage.setItem("px_user", JSON.stringify(user));
+}
+
+function clearAuth() {
+  auth.token = null;
+  auth.user  = null;
+  localStorage.removeItem("px_token");
+  localStorage.removeItem("px_user");
+}
+
+function authHeaders() {
+  return auth.token ? { "Authorization": `Bearer ${auth.token}` } : {};
+}
+
+/* ── Case state ── */
 const state = {
   step: 1,
   userType: null,
@@ -97,7 +121,8 @@ function renderStep1() {
     const fd = new FormData();
     fd.append("user_type", state.userType);
     fd.append("customer_meta", JSON.stringify(meta));
-    const res = await fetch("/cases/create", { method: "POST", body: fd });
+    const res = await fetch("/cases/create", { method: "POST", headers: authHeaders(), body: fd });
+    if (res.status === 401) { clearAuth(); renderAuthGate(); return; }
     const data = await res.json();
     state.caseId = data.case_id;
     state.step = 2; render();
@@ -170,7 +195,8 @@ async function uploadDoc(file, docId, password = null) {
   fd.append("file", file);
   if (password) fd.append("password", password);
   try {
-    const res = await fetch("/cases/upload-doc", { method: "POST", body: fd });
+    const res = await fetch("/cases/upload-doc", { method: "POST", headers: authHeaders(), body: fd });
+    if (res.status === 401) { clearAuth(); renderAuthGate(); return { status: "FAIL", reason: "Session expired." }; }
     return await res.json();
   } catch {
     return { status: "FAIL", reason: "Network error.", action_required: null };
@@ -243,7 +269,7 @@ async function runReview() {
     const payload = Object.entries(state.docResults).map(([id, r]) => ({ doc: id, ...r }));
     const res = await fetch(`/cases/review?case_id=${state.caseId}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...authHeaders() },
       body: JSON.stringify(payload),
     });
     state.reviewResult = await res.json();
@@ -314,7 +340,7 @@ async function runCreditProfile() {
   try {
     const res = await fetch(`/cases/credit-profile?case_id=${state.caseId}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...authHeaders() },
       body: JSON.stringify(mockInput),
     });
     state.creditResult = await res.json();
@@ -383,7 +409,7 @@ async function generateReport() {
   fd.append("encrypt", "false");
 
   try {
-    const res = await fetch("/cases/generate-report", { method: "POST", body: fd });
+    const res = await fetch("/cases/generate-report", { method: "POST", headers: authHeaders(), body: fd });
     state.reportBlob = await res.blob();
     state.reportPassword = res.headers.get("X-PDF-Password");
     const sumRaw = res.headers.get("X-Report-Summary");
@@ -396,7 +422,7 @@ async function generateReport() {
 
 async function initiatePayment() {
   try {
-    const res = await fetch(`/payments/checkout?case_id=${state.caseId}`, { method: "POST" });
+    const res = await fetch(`/payments/checkout?case_id=${state.caseId}`, { method: "POST", headers: authHeaders() });
     const data = await res.json();
     if (data.checkout_url) {
       window.location.href = data.checkout_url;
@@ -446,4 +472,97 @@ function newCase() {
   render();
 }
 
-document.addEventListener("DOMContentLoaded", render);
+/* ── Auth UI ── */
+function renderAuthGate() {
+  const isLogin = !window._authMode || window._authMode === "login";
+  document.getElementById("view").innerHTML = `
+    <div class="card" style="max-width:420px;margin:0 auto">
+      <h2 style="margin-bottom:6px">${isLogin ? "Sign In" : "Create Account"}</h2>
+      <p class="hint">${isLogin ? "Sign in to access your cases." : "Create a free account to get started."}</p>
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <input id="auth-email" type="email" placeholder="Email address"
+          style="padding:11px 14px;border:1.5px solid #e2e8f0;border-radius:7px;font-size:.9rem">
+        <input id="auth-pw" type="password" placeholder="Password"
+          style="padding:11px 14px;border:1.5px solid #e2e8f0;border-radius:7px;font-size:.9rem">
+        <div id="auth-error" style="color:#dc2626;font-size:.8rem;display:none"></div>
+        <button class="btn btn-primary" id="auth-submit" style="width:100%;justify-content:center">
+          ${isLogin ? "Sign In →" : "Create Account →"}
+        </button>
+      </div>
+      <p style="text-align:center;margin-top:16px;font-size:.82rem;color:#64748b">
+        ${isLogin
+          ? `No account? <a href="#" id="auth-toggle" style="color:#0d9488">Sign up</a>`
+          : `Already have one? <a href="#" id="auth-toggle" style="color:#0d9488">Sign in</a>`}
+      </p>
+    </div>`;
+
+  document.getElementById("auth-toggle").onclick = (e) => {
+    e.preventDefault();
+    window._authMode = isLogin ? "signup" : "login";
+    renderAuthGate();
+  };
+
+  document.getElementById("auth-submit").onclick = async () => {
+    const email = document.getElementById("auth-email").value.trim();
+    const pw    = document.getElementById("auth-pw").value;
+    const errEl = document.getElementById("auth-error");
+    errEl.style.display = "none";
+
+    const endpoint = isLogin ? "/auth/login" : "/auth/signup";
+    const res = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password: pw }),
+    });
+    const data = await res.json();
+
+    if (!res.ok) {
+      errEl.textContent = data.detail || "Authentication failed.";
+      errEl.style.display = "block";
+      return;
+    }
+
+    if (isLogin) {
+      saveAuth(data.access_token, data.user);
+      updateHeaderUser();
+      render();
+    } else {
+      errEl.style.color = "#16a34a";
+      errEl.textContent = data.message;
+      errEl.style.display = "block";
+    }
+  };
+}
+
+function updateHeaderUser() {
+  const el = document.getElementById("header-user");
+  if (!el) return;
+  if (auth.user) {
+    el.innerHTML = `
+      <span style="font-size:.78rem;color:#94a3b8">${auth.user.email}</span>
+      <button onclick="logout()" style="font-size:.75rem;color:#0d9488;background:none;border:none;cursor:pointer;margin-left:8px">Sign out</button>`;
+  } else {
+    el.innerHTML = "";
+  }
+}
+
+async function logout() {
+  if (auth.token) {
+    await fetch("/auth/logout", {
+      method: "POST",
+      headers: authHeaders(),
+    }).catch(() => {});
+  }
+  clearAuth();
+  updateHeaderUser();
+  renderAuthGate();
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  updateHeaderUser();
+  if (!auth.token) {
+    renderAuthGate();
+  } else {
+    render();
+  }
+});

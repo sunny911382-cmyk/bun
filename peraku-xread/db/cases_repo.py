@@ -8,8 +8,9 @@ from typing import Any
 from db.client import get_db
 
 
-def create_case(user_type: str, customer_meta: dict) -> dict:
+def create_case(user_type: str, customer_meta: dict, user_id: str) -> dict:
     row = {
+        "user_id": user_id,
         "user_type": user_type,
         "status": "draft",
         "customer_age": customer_meta.get("age"),
@@ -19,6 +20,17 @@ def create_case(user_type: str, customer_meta: dict) -> dict:
     }
     res = get_db().table("cases").insert(row).execute()
     return res.data[0]
+
+
+def list_cases_for_user(user_id: str) -> list[dict]:
+    res = (
+        get_db().table("cases")
+        .select("id, created_at, user_type, status, declared_income, report_summary")
+        .eq("user_id", user_id)
+        .order("created_at", desc=True)
+        .execute()
+    )
+    return res.data
 
 
 def save_doc_results(case_id: str, doc_results: list[dict]) -> None:
